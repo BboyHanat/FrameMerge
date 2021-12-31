@@ -1,0 +1,13 @@
+homo_conf:
+  url_list:
+    - "rtsp://admin:dahua123456@113.31.167.129:8893/cam/realmonitor?channel=1&subtype=0"
+    - "rtsp://admin:dahua123456@113.31.167.129:8894/cam/realmonitor?channel=1&subtype=0"
+  max_frame_num: 15
+  output_path: "tmp/"
+  param_file: "homography_param.pkl"
+  image_size:
+    - 1280
+    - 960
+  model_path: "weights/rord.pth"
+  use_gpu: True
+  debug: False
