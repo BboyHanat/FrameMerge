@@ -26,11 +26,19 @@ cap2 = cv2.VideoCapture("tmp/output_1.avi")
 while True:
     ret, image = cap.read()
     ret1, image1 = cap2.read()
+    mask = cv2.imread("tmp/mask_0.png", 0)
     if ret:
         h, w = image.shape[0: 2]
         new_w, new_h = compute_dst_size(homo=homo, w=w, h=w)
         result = cv2.warpPerspective(image, homo, dsize=(new_w, new_h),
                                      flags=cv2.WARP_FILL_OUTLIERS)
+        result_mask = cv2.warpPerspective(mask, homo, dsize=(new_w, new_h),
+                                            flags=cv2.WARP_FILL_OUTLIERS)
+
+        ret, result_mask = cv2.threshold(result_mask, 0, 1, cv2.THRESH_BINARY_INV)
+
+        result = result * np.expand_dims(result_mask, -1)
+
         cv2.imshow("src1", image)
         cv2.imshow("src2", image1)
         cv2.imshow("dst", result)

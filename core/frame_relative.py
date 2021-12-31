@@ -97,6 +97,11 @@ class FrameRelative(object):
         with open(param_file, 'wb') as fp:
             pickle.dump(homography_dict, fp)
 
+
+    def save_merged_video(self, video_path_a, video_path_b):
+
+
+
     def read_video_and_get_homography(self, video_path_a, video_path_b):
         """
 
