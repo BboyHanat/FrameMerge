@@ -83,19 +83,19 @@ class FrameRelative(object):
         os.makedirs(self.output_path, exist_ok=True)
         param_file = os.path.join(self.output_path, self.param_file)
 
-        self.video_output_list.append(self.video_output_list[0])
         pos = 0
         homography_dict = dict()
         while pos < len(self.video_output_list) - 1:
             video_path_a = self.video_output_list[pos]
             video_path_b = self.video_output_list[pos + 1]
             homo, mask_a, mask_b = self.read_video_and_get_homography(video_path_a, video_path_b)
+            cv2.imwrite(os.path.join(self.output_path, "mask_{}.png".format(pos)), mask_a)
+            cv2.imwrite(os.path.join(self.output_path, "mask_{}.png".format(pos + 1)), mask_b)
             merged_video_output = os.path.join(self.output_path, "merge-{}-{}.avi".format(pos, pos + 1))
             self.save_merged_video(video_path_a, video_path_b,
                                    homo, mask_a, mask_b, merged_video_output)
             homography_dict["{}-{}".format(str(pos), str(pos + 1))] = homo
-            cv2.imwrite(os.path.join(self.output_path, "mask_{}.png".format(pos)), mask_a)
-            cv2.imwrite(os.path.join(self.output_path, "mask_{}.png".format(pos + 1)), mask_b)
+
             pos += 1
 
         print(homography_dict)
@@ -146,6 +146,7 @@ class FrameRelative(object):
                 frame_b = self.perspective_transform(frame_b, homo_b, new_w, new_h)
                 frame_b = np.pad(frame_b, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)),
                                  'constant', constant_values=(0, 0))
+                cv2.imwrite("test-{}.png".format(str(frame_count)), frame_b)
                 frame_b[roi_y_min: roi_y_max, roi_x_min: roi_x_max, :] = frame_a
                 # cv2.imshow("test", frame_b)
                 # cv2.waitKey(0)
@@ -176,7 +177,8 @@ class FrameRelative(object):
 
     @staticmethod
     def find_mask_center(mask):
-
+        kernel = cv2.getStructuringElement(shape=cv2.MORPH_ELLIPSE, ksize=(20, 20))
+        mask = cv2.morphologyEx(mask,cv2.MORPH_CLOSE, kernel)
         contours, hierarchy = cv2.findContours(mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
         max_cont = list()
         max_area = 0.0
@@ -241,38 +243,41 @@ class FrameRelative(object):
         frame_merge_cp = cv2.copyTo(frame_merge, mask=None)
         frame_a_point = list()
         frame_b_point = list()
+        pt = list()
 
         def on_mouse(event, x, y, flags, param):  # 标准鼠标交互函数
+
             if event == cv2.EVENT_MOUSEMOVE:
-                if len(frame_a_point) == len(frame_b_point) - 1:
-                    cv2.putText(frame_merge_cp, text="Please take a key point from left",
-                                org=(show_w // 2 + 1, 20), fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                                fontScale=1.2, color=(255, 255, 255))
-                    pt1 = tuple(frame_b_point[-1])
-                    pt2 = (x, y)
-                    cv2.line(frame_merge_cp, pt1, pt2, color=(255, 0, 0), thickness=2)
-                elif len(frame_a_point) - 1 == len(frame_b_point):
-                    cv2.putText(frame_merge_cp, text="Please take a key point from right",
-                                org=(1, 20), fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                                fontScale=1.2, color=(255, 255, 255))
-                    pt1 = tuple(frame_a_point[-1])
-                    pt2 = (x, y)
-                    cv2.line(frame_merge_cp, pt1, pt2, color=(255, 0, 0), thickness=2)
+                if pt:
+                    del pt[0]
+                pt.append((x, y))
 
             if event == cv2.EVENT_LBUTTONUP:  # 当鼠标移动时
-                if x > show_w / 2 and len(frame_a_point) - 1 == len(frame_b_point) \
-                        or len(frame_a_point) == len(frame_b_point) == 0:
+                if x > show_w / 2:
                     frame_b_point.append((x, y))
-                elif len(frame_a_point) == len(frame_b_point) - 1 \
-                        or len(frame_a_point) == len(frame_b_point) == 0:
+                else:
                     frame_a_point.append((x, y))
 
         cv2.namedWindow("get_kp")
         cv2.setMouseCallback("get_kp", on_mouse)
         while True:
+
             frame_merge_cp = cv2.copyTo(frame_merge, mask=None)
+            if len(frame_a_point) - 1 == len(frame_b_point):
+                pt1 = tuple(frame_a_point[-1])
+                if pt:
+                    cv2.line(frame_merge_cp, pt1, pt[0], color=(255, 0, 0), thickness=2)
+            elif len(frame_a_point) == len(frame_b_point) - 1:
+                pt1 = tuple(frame_b_point[-1])
+                if pt:
+                    cv2.line(frame_merge_cp, pt1, pt[0], color=(255, 0, 0), thickness=2)
+            if len(frame_a_point) == len(frame_b_point) == 5:
+                break
             cv2.imshow("get_kp", frame_merge_cp)
             cv2.waitKey(30)
+
+        self.point_list_a.extend(frame_a_point)
+        self.point_list_b.extend(frame_b_point)
 
     def find_one_frame_match(self, frame_a, frame_b):
         feat1 = extract(self.model, frame_a, device=self.device)
