@@ -15,12 +15,19 @@ def rord_matching(feat1, feat2):
     :return:
     """
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-    matches = bf.match(feat1['descriptors'], feat2['descriptors'])
+    matches_ = bf.match(feat1['descriptors'], feat2['descriptors'])
+    matches = list()
+    for match in matches_:
+        if match.distance > 0.85:
+            matches.append(match)
     matches = sorted(matches, key=lambda x: x.distance)
 
     match1 = [m.queryIdx for m in matches]
     match2 = [m.trainIdx for m in matches]
-
+    a = cv2.KeyPoint()
+    if isinstance(feat1['key_points'][0], cv2.KeyPoint):
+        feat1['key_points'] = np.asarray([(kp.pt[0], kp.pt[1]) for kp in feat1['key_points']])
+        feat2['key_points'] = np.asarray([(kp.pt[0], kp.pt[1]) for kp in feat2['key_points']])
     key_points_left = feat1['key_points'][match1, : 2]
     key_points_right = feat2['key_points'][match2, : 2]
 

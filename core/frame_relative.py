@@ -8,7 +8,9 @@ import numpy as np
 import pydegensac
 from core.test_camera import run_multi_stream, image_get, stop_flag
 from core.kp_match import rord_matching
-from core.kp_extract import init_model, extract
+from core.kp_extract import init_model, extract, extract1
+
+
 
 
 class FrameRelative(object):
@@ -88,6 +90,9 @@ class FrameRelative(object):
             video_path_a = self.video_output_list[pos]
             video_path_b = self.video_output_list[pos + 1]
             homo, mask_a, mask_b = self.read_video_and_get_homography(video_path_a, video_path_b)
+            merged_video_output = os.path.join(self.output_path, "merge-{}-{}.avi".format(pos, pos + 1))
+            self.save_merged_video(video_path_a, video_path_b,
+                                   homo, mask_a, mask_b, merged_video_output)
             homography_dict["{}-{}".format(str(pos), str(pos + 1))] = homo
             cv2.imwrite(os.path.join(self.output_path, "mask_{}.png".format(pos)), mask_a)
             cv2.imwrite(os.path.join(self.output_path, "mask_{}.png".format(pos + 1)), mask_b)
@@ -97,10 +102,94 @@ class FrameRelative(object):
         with open(param_file, 'wb') as fp:
             pickle.dump(homography_dict, fp)
 
+    def save_merged_video(self, video_path_a, video_path_b, homo_b, mask_a, mask_b, merged_video_output):
+        cap_a = cv2.VideoCapture(video_path_a)
+        cap_b = cv2.VideoCapture(video_path_b)
 
-    def save_merged_video(self, video_path_a, video_path_b):
+        new_w, new_h = self.compute_dst_size(homo_b, self.image_size[0], self.image_size[1])
+        homo_b[0, 2] = max(homo_b[0, 2], 0)
+        homo_b[1, 2] = max(homo_b[1, 2], 0)
 
+        mask_b = self.perspective_transform(mask_b, homo_b, new_w, new_h)
 
+        center_x_a, center_y_a = self.find_mask_center(mask_a)
+        center_x_b, center_y_b = self.find_mask_center(mask_b)
+        cv2.circle(mask_a, (center_x_a, center_y_a), radius=15, color=120, thickness=5)
+        cv2.circle(mask_b, (center_x_b, center_y_b), radius=15, color=120, thickness=5)
+        cv2.imwrite("debug1.png", mask_a)
+        cv2.imwrite("debug2.png", mask_b)
+        roi_x_min = center_x_b - center_x_a
+        roi_y_min = center_y_b - center_y_a
+        roi_x_max = center_x_b + (self.image_size[0] - center_x_a)
+        roi_y_max = center_y_b + (self.image_size[1] - center_y_a)
+
+        # compute padding and coord after shift
+        pad_l = np.abs(min(0, roi_x_min))
+        pad_t = np.abs(min(0, roi_y_min))
+        roi_x_max = roi_x_max + pad_l
+        roi_y_max = roi_y_max + pad_t
+        pad_r = max(0, roi_x_max - new_w)
+        pad_b = max(0, roi_y_max - new_h)
+        roi_x_min = roi_x_min + pad_l
+        roi_y_min = roi_y_min + pad_t
+
+        frame_w = pad_l + new_w + pad_r
+        frame_h = pad_t + new_h + pad_b
+        fourcc = cv2.VideoWriter_fourcc('X', 'V', 'I', 'D')
+        handler = cv2.VideoWriter(merged_video_output, fourcc=fourcc, fps=20,
+                                  frameSize=(frame_w, frame_h))
+        frame_count = 0
+        while frame_count < self.max_frame_num and (cap_a.isOpened() and cap_b.isOpened()):
+            ret_a, frame_a = cap_a.read()
+            ret_b, frame_b = cap_b.read()
+            if ret_a and ret_b:
+                frame_b = self.perspective_transform(frame_b, homo_b, new_w, new_h)
+                frame_b = np.pad(frame_b, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)),
+                                 'constant', constant_values=(0, 0))
+                frame_b[roi_y_min: roi_y_max, roi_x_min: roi_x_max, :] = frame_a
+                # cv2.imshow("test", frame_b)
+                # cv2.waitKey(0)
+                handler.write(frame_b)
+                frame_count += 1
+            else:
+                break
+        handler.release()
+
+    @staticmethod
+    def perspective_transform(image, homo, o_w, o_h):
+        result_mask = cv2.warpPerspective(image, homo, dsize=(o_w, o_h),
+                                          flags=cv2.WARP_FILL_OUTLIERS)
+        return result_mask
+
+    @staticmethod
+    def compute_dst_size(homo, w, h):
+        pts = np.asarray([[0, 0], [0, w], [h, w], [h, 0]],
+                         dtype=np.float32).reshape(-1, 1, 2)
+        pts_p = cv2.perspectiveTransform(np.asarray(pts, dtype=np.float32).reshape(-1, 1, 2), homo)
+        y_min = min(pts_p[:, 0, 0].min(), 0)
+        x_min = min(pts_p[:, 0, 1].min(), 0)
+        y_max = max(pts_p[:, 0, 0].max(), h)
+        x_max = max(pts_p[:, 0, 1].max(), w)
+        new_w = int(x_max - x_min)
+        new_h = int(y_max - y_min)
+        return new_w, new_h
+
+    @staticmethod
+    def find_mask_center(mask):
+
+        contours, hierarchy = cv2.findContours(mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE)
+        max_cont = list()
+        max_area = 0.0
+        for cont in contours:
+            area = cv2.contourArea(cont)
+            if area > max_area:
+                max_area = area
+                max_cont.append(cont)
+        m = cv2.moments(max_cont[-1])
+        c_x = int(m["m10"] / m["m00"])
+        c_y = int(m["m01"] / m["m00"])
+
+        return c_x, c_y
 
     def read_video_and_get_homography(self, video_path_a, video_path_b):
         """
@@ -117,7 +206,7 @@ class FrameRelative(object):
             ret_a, frame_a = cap_a.read()
             ret_b, frame_b = cap_b.read()
             if ret_a and ret_b:
-                self.find_one_frame_match(frame_a, frame_b)
+                self.find_one_frame_match_by_hand(frame_a, frame_b)
             else:
                 break
             frame_count += 1
@@ -142,6 +231,48 @@ class FrameRelative(object):
         hull = cv2.convexHull(points)
         cv2.fillPoly(mask, [hull], 255)
         return mask
+
+    def find_one_frame_match_by_hand(self, frame_a, frame_b):
+        frame_merge = np.hstack([frame_a, frame_b])
+        h, w = frame_merge.shape[0:2]
+        show_w = w // 2
+        show_h = h // 2
+        frame_merge = cv2.resize(frame_merge, (show_w, show_h))
+        frame_merge_cp = cv2.copyTo(frame_merge, mask=None)
+        frame_a_point = list()
+        frame_b_point = list()
+
+        def on_mouse(event, x, y, flags, param):  # 标准鼠标交互函数
+            if event == cv2.EVENT_MOUSEMOVE:
+                if len(frame_a_point) == len(frame_b_point) - 1:
+                    cv2.putText(frame_merge_cp, text="Please take a key point from left",
+                                org=(show_w // 2 + 1, 20), fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                                fontScale=1.2, color=(255, 255, 255))
+                    pt1 = tuple(frame_b_point[-1])
+                    pt2 = (x, y)
+                    cv2.line(frame_merge_cp, pt1, pt2, color=(255, 0, 0), thickness=2)
+                elif len(frame_a_point) - 1 == len(frame_b_point):
+                    cv2.putText(frame_merge_cp, text="Please take a key point from right",
+                                org=(1, 20), fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                                fontScale=1.2, color=(255, 255, 255))
+                    pt1 = tuple(frame_a_point[-1])
+                    pt2 = (x, y)
+                    cv2.line(frame_merge_cp, pt1, pt2, color=(255, 0, 0), thickness=2)
+
+            if event == cv2.EVENT_LBUTTONUP:  # 当鼠标移动时
+                if x > show_w / 2 and len(frame_a_point) - 1 == len(frame_b_point) \
+                        or len(frame_a_point) == len(frame_b_point) == 0:
+                    frame_b_point.append((x, y))
+                elif len(frame_a_point) == len(frame_b_point) - 1 \
+                        or len(frame_a_point) == len(frame_b_point) == 0:
+                    frame_a_point.append((x, y))
+
+        cv2.namedWindow("get_kp")
+        cv2.setMouseCallback("get_kp", on_mouse)
+        while True:
+            frame_merge_cp = cv2.copyTo(frame_merge, mask=None)
+            cv2.imshow("get_kp", frame_merge_cp)
+            cv2.waitKey(30)
 
     def find_one_frame_match(self, frame_a, frame_b):
         feat1 = extract(self.model, frame_a, device=self.device)
@@ -172,7 +303,7 @@ class FrameRelative(object):
 
         nd_points_a = np.asarray(self.point_list_a)
         nd_points_b = np.asarray(self.point_list_b)
-        homo_b, inliers = pydegensac.findHomography(nd_points_a, nd_points_b,
+        homo_b, inliers = pydegensac.findHomography(nd_points_b, nd_points_a,
                                                     10.0, 0.99, 10000)
         inlier_kp_a = [[point[0], point[1]] for point in nd_points_a[inliers]]
         inlier_kp_b = [[point[0], point[1]] for point in nd_points_b[inliers]]

@@ -1,3 +1,4 @@
+import cv2
 import torch
 import numpy as np
 from core.model_test import D2Net
@@ -27,4 +28,14 @@ def extract(model, image, device):
     feat['scores'] = scores
     feat['descriptors'] = descriptors
 
+    return feat
+
+
+def extract1(model, image, device):
+
+    orb = cv2.ORB_create(1000)
+    key_points, descriptors = orb.detectAndCompute(image, None)
+    feat = dict()
+    feat['key_points'] = key_points
+    feat['descriptors'] = descriptors
     return feat
